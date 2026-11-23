@@ -10955,6 +10955,12 @@ CLIActionsConfigDef::CLIActionsConfigDef()
     def->cli = "export-sla|sla";
     def->set_default_value(new ConfigOptionBool(false));*/
 
+    def = this->add("headless_print", coString);
+    def->label = "Headless print";
+    def->tooltip = "Submit a saved printer file using the installed Bambu networking plugin.";
+    def->cli_params = "job.json";
+    def->set_default_value(new ConfigOptionString(""));
+
     def = this->add("export_3mf", coString);
     def->label = "Export 3MF";
     def->tooltip = "Export project as 3MF.";

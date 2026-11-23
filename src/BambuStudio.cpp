@@ -17,6 +17,7 @@
     #endif /* SLIC3R_GUI */
 #endif /* WIN32 */
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <cstring>
@@ -100,6 +101,10 @@ using namespace nlohmann;
 
 #ifdef SLIC3R_GUI
     #include "slic3r/GUI/GUI_Init.hpp"
+    #include "slic3r/Utils/NetworkAgent.hpp"
+    #include "slic3r/Utils/HeadlessPrint.hpp"
+    #include <chrono>
+    #include <thread>
 #endif /* SLIC3R_GUI */
 
 using namespace Slic3r;
@@ -1659,6 +1664,64 @@ static void load_downward_settings_list_from_config(std::string config_file, std
     }
 }
 
+#ifdef SLIC3R_GUI
+static int run_headless_print(const std::string& manifest)
+{
+    try {
+        boost::nowide::ifstream input(manifest);
+        if (!input)
+            throw std::runtime_error("Cannot open the print job manifest.");
+        const HeadlessPrintJob job = parse_headless_print_job(nlohmann::json::parse(input));
+        if (!job.confirm) {
+            boost::nowide::cout << "Validated print job. Set confirm to true after checking the build plate and filament.\n";
+            return 0;
+        }
+        if (data_dir().empty() || !boost::filesystem::is_directory(data_dir()))
+            throw std::runtime_error("Use --datadir with the directory of a signed-in Studio installation.");
+
+        if (NetworkAgent::initialize_network_module() != BAMBU_NETWORK_SUCCESS)
+            throw std::runtime_error("Could not load the installed networking plugin.");
+        struct UnloadModule { ~UnloadModule() { NetworkAgent::unload_network_module(); } } unload_module;
+
+        const std::string studio_version = SLIC3R_VERSION;
+        const std::string plugin_version = NetworkAgent::get_version();
+        if (plugin_version.size() < 8 || plugin_version.compare(0, 8, studio_version, 0, 8) != 0)
+            throw std::runtime_error("The installed networking plugin is incompatible with this Studio version.");
+
+        NetworkAgent agent(data_dir());
+        if (agent.set_config_dir(data_dir()) != BAMBU_NETWORK_SUCCESS ||
+            agent.set_cert_file(resources_dir() + "/cert", "slicer_base64.cer") != BAMBU_NETWORK_SUCCESS ||
+            agent.set_country_code(job.country_code) != BAMBU_NETWORK_SUCCESS ||
+            agent.start() != BAMBU_NETWORK_SUCCESS)
+            throw std::runtime_error("Could not initialize the networking plugin.");
+        if (!agent.is_user_login())
+            throw std::runtime_error("The plugin could not restore the saved Bambu account session.");
+        if (agent.connect_server() != BAMBU_NETWORK_SUCCESS)
+            throw std::runtime_error("Could not connect to the Bambu service.");
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+        while (!agent.is_server_connected() && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (!agent.is_server_connected())
+            throw std::runtime_error("Timed out connecting to the Bambu service.");
+
+        const int result = agent.start_sdcard_print(
+            job.params, [](int, int, std::string) {}, [] { return false; });
+        if (result == BAMBU_NETWORK_SIGNED_ERROR)
+            throw std::runtime_error("The networking plugin rejected the print authorization.");
+        if (result != BAMBU_NETWORK_SUCCESS)
+            throw std::runtime_error("The networking plugin rejected the print request (code " +
+                                     std::to_string(result) + ").");
+        boost::nowide::cout << "Print request accepted. Check the printer for progress.\n";
+        return 0;
+    } catch (const nlohmann::json::exception&) {
+        boost::nowide::cerr << "Headless print: invalid job manifest JSON or field type.\n";
+    } catch (const std::exception& error) {
+        boost::nowide::cerr << "Headless print: " << error.what() << '\n';
+    }
+    return 1;
+}
+#endif
+
 int CLI::run(int argc, char **argv)
 {
     // Mark the main thread for the debugger and for runtime checks.
@@ -1727,6 +1790,18 @@ int CLI::run(int argc, char **argv)
     {
         boost::nowide::cerr << "setup params error" << std::endl;
         return CLI_INVALID_PARAMS;
+    }
+    if (std::find(m_actions.begin(), m_actions.end(), "headless_print") != m_actions.end()) {
+        if (m_actions.size() != 1 || !m_input_files.empty() || !m_transforms.empty()) {
+            boost::nowide::cerr << "--headless-print must be used without slicing actions or input models.\n";
+            return CLI_INVALID_PARAMS;
+        }
+#ifdef SLIC3R_GUI
+        return run_headless_print(m_config.opt_string("headless_print"));
+#else
+        boost::nowide::cerr << "--headless-print requires a build with the networking plugin loader.\n";
+        return 1;
+#endif
     }
     BOOST_LOG_TRIVIAL(info) << "finished setup params, argc="<< argc << std::endl;
     std::string temp_path = wxFileName::GetTempDir().utf8_str().data();

@@ -223,7 +223,7 @@ static const wxString ctrl = _L("Ctrl+");
 #endif
 
 MainFrame::MainFrame() :
-DPIFrame(NULL, wxID_ANY, "", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_STYLE, "mainframe")
+DPIFrame(NULL, wxID_ANY, "Bambu Studio NULL EDITION", wxDefaultPosition, wxDefaultSize, BORDERLESS_FRAME_STYLE, "mainframe")
     , m_printhost_queue_dlg(new PrintHostQueueDialog(this))
     // BBS
     , m_recent_projects(18)
@@ -1252,26 +1252,20 @@ void MainFrame::update_title()
 {
     if (!m_plater)
         return;
-    // Prepend "* " while the project has unsaved changes (#9987), on top of the project name
-    // that is already shown: in the custom topbar on Windows, and in the native window title
-    // on macOS/Linux (both set by Plater::priv::set_project_name).
-    const wxString name  = m_plater->get_project_name();
-    const wxString title = (m_plater->is_project_dirty() && !name.IsEmpty()) ? ("* " + name) : name;
+    const wxString name = m_plater->get_project_name();
+    const wxString project_title = (m_plater->is_project_dirty() && !name.IsEmpty()) ? ("* " + name) : name;
+    const wxString edition = "Bambu Studio NULL EDITION";
+    const wxString title = project_title.IsEmpty() ? edition : project_title + " - " + edition;
     if (title == m_title_cache)
         return;
     m_title_cache = title;
 #ifdef __WINDOWS__
     if (m_topbar)
         m_topbar->SetTitle(title);
-    // Also reflect the "*" in the window/taskbar title, which set_project_name builds
-    // as "<name> - BambuStudio".
-    SetTitle(title + " - BambuStudio");
-#else
+#endif
     SetTitle(title);
 #ifdef __APPLE__
-    if (!title.IsEmpty())
-        update_title_colour_after_set_title();
-#endif
+    update_title_colour_after_set_title();
 #endif
 }
 
